@@ -15,11 +15,17 @@ def readVersion(path, infile):
                 p = line.find(s)
                 if(p != -1):
                     version += line[p+13:].rstrip() + "."
-
-    version = version[:-1] + "_esp8266.bin"
-    src = path + ".pio/build/d1_mini/firmware.bin"
-    dst = path + ".pio/build/d1_mini/out/" + version
-    os.mkdir(path + ".pio/build/d1_mini/out/")
+    
+    os.mkdir(path + ".pio/build/out/")
+    
+    versionout = version[:-1] + "_esp8266_release.bin"
+    src = path + ".pio/build/esp8266-release/firmware.bin"
+    dst = path + ".pio/build/out/" + versionout
+    os.rename(src, dst)
+    
+    versionout = version[:-1] + "_esp8266_debug.bin"
+    src = path + ".pio/build/esp8266-debug/firmware.bin"
+    dst = path + ".pio/build/out/" + versionout
     os.rename(src, dst)
 
 readVersion("../", "defines.h")

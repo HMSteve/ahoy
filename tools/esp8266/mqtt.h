@@ -16,38 +16,39 @@ class mqtt {
             mClient     = new PubSubClient(mEspClient);
             mAddressSet = false;
 
-            memset(mUser,  0, MQTT_USER_LEN);
-            memset(mPwd,   0, MQTT_PWD_LEN);
-            memset(mTopic, 0, MQTT_TOPIC_LEN);
+            memset(mDevName, 0, DEVNAME_LEN);
         }
 
         ~mqtt() { }
 
-        void setup(const char *broker, const char *topic, const char *user, const char *pwd, uint16_t port) {
+        void setup(mqttConfig_t *cfg, const char *devname) {
             DPRINTLN(DBG_VERBOSE, F("mqtt.h:setup"));
             mAddressSet = true;
-            mClient->setServer(broker, port);
-            mClient->setBufferSize(MQTT_MAX_PACKET_SIZE);
 
-            mPort = port;
-            snprintf(mUser, MQTT_USER_LEN, "%s", user);
-            snprintf(mPwd, MQTT_PWD_LEN, "%s", pwd);
-            snprintf(mTopic, MQTT_TOPIC_LEN, "%s", topic);
+            mCfg = cfg;
+            snprintf(mDevName, DEVNAME_LEN,    "%s", devname);
+
+            mClient->setServer(mCfg->broker, mCfg->port);
+            mClient->setBufferSize(MQTT_MAX_PACKET_SIZE);
+        }
+
+        void setCallback(MQTT_CALLBACK_SIGNATURE){
+            mClient->setCallback(callback);
         }
 
         void sendMsg(const char *topic, const char *msg) {
             //DPRINTLN(DBG_VERBOSE, F("mqtt.h:sendMsg"));
             char top[64];
-            snprintf(top, 64, "%s/%s", mTopic, topic);
-            sendMsg2(top, msg);
+            snprintf(top, 64, "%s/%s", mCfg->topic, topic);
+            sendMsg2(top, msg, false);
         }
 
-        void sendMsg2(const char *topic, const char *msg) {
+        void sendMsg2(const char *topic, const char *msg, boolean retained) {
             if(mAddressSet) {
                 if(!mClient->connected())
                     reconnect();
                 if(mClient->connected())
-                    mClient->publish(topic, msg);
+                    mClient->publish(topic, msg, retained);
             }
         }
 
@@ -58,51 +59,44 @@ class mqtt {
             return mClient->connected();
         }
 
-        char *getUser(void) {
-            //DPRINTLN(DBG_VERBOSE, F("mqtt.h:getUser"));
-            return mUser;
-        }
-
-        char *getPwd(void) {
-            //DPRINTLN(DBG_VERBOSE, F("mqtt.h:getPwd"));
-            return mPwd;
-        }
-
-        char *getTopic(void) {
-            //DPRINTLN(DBG_VERBOSE, F("mqtt.h:getTopic"));
-            return mTopic;
-        }
-
-        uint16_t getPort(void) {
-            return mPort;
-        }
-
         void loop() {
             //DPRINT(F("m"));
-            //if(!mClient->connected())
-            //    reconnect();
+            if(!mClient->connected())
+                reconnect();
             mClient->loop();
         }
 
     private:
         void reconnect(void) {
-            //DPRINTLN(DBG_VERBOSE, F("mqtt.h:reconnect"));
+            DPRINTLN(DBG_DEBUG, F("mqtt.h:reconnect"));
+            DPRINTLN(DBG_DEBUG, F("MQTT mClient->_state ") + String(mClient->state()) );
+            DPRINTLN(DBG_DEBUG, F("WIFI mEspClient.status ") + String(mEspClient.status()) );
             if(!mClient->connected()) {
-                if((strlen(mUser) > 0) && (strlen(mPwd) > 0))
-                    mClient->connect(DEF_DEVICE_NAME, mUser, mPwd);
-                else
-                    mClient->connect(DEF_DEVICE_NAME);
+                if(strlen(mDevName) > 0) {
+                    // der Server und der Port müssen neu gesetzt werden, 
+                    // da ein MQTT_CONNECTION_LOST -3 die Werte zerstört hat.
+                    mClient->setServer(mCfg->broker, mCfg->port);
+                    mClient->setBufferSize(MQTT_MAX_PACKET_SIZE);
+                    if((strlen(mCfg->user) > 0) && (strlen(mCfg->pwd) > 0))
+                        mClient->connect(mDevName, mCfg->user, mCfg->pwd);
+                    else
+                        mClient->connect(mDevName);
+                }
+                // ein Subscribe ist nur nach einem connect notwendig
+                char topic[MQTT_TOPIC_LEN + 13 ]; // "/devcontrol/#" --> + 6 byte
+                // ToDo: "/devcontrol/#" is hardcoded 
+                snprintf(topic, MQTT_TOPIC_LEN + 13, "%s/devcontrol/#", mCfg->topic);
+                DPRINTLN(DBG_INFO, F("subscribe to ") + String(topic));
+                mClient->subscribe(topic); // subscribe to mTopic + "/devcontrol/#"
             }
         }
 
         WiFiClient mEspClient;
         PubSubClient *mClient;
-
+        
         bool mAddressSet;
-        uint16_t mPort;
-        char mUser[MQTT_USER_LEN];
-        char mPwd[MQTT_PWD_LEN];
-        char mTopic[MQTT_TOPIC_LEN];
+        mqttConfig_t *mCfg;
+        char mDevName[DEVNAME_LEN];
 };
 
 #endif /*__MQTT_H_*/

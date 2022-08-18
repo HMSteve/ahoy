@@ -19,11 +19,15 @@
 #define DTU_RADIO_ID            ((uint64_t)0x1234567801ULL)
 #define DUMMY_RADIO_ID          ((uint64_t)0xDEADBEEF01ULL)
 
-#define RX_CHANNELS             5
-#define RX_LOOP_CNT             300
+#define RF_CHANNELS             5
+#define RF_LOOP_CNT             300
 
+#define TX_REQ_INFO         0X15
+#define TX_REQ_DEVCONTROL   0x51
+#define ALL_FRAMES          0x80
+#define SINGLE_FRAME        0x81
 
-const char* const rf24AmpPower[] = {"MIN", "LOW", "HIGH", "MAX"};
+const char* const rf24AmpPowerNames[] = {"MIN", "LOW", "HIGH", "MAX"};
 
 
 //-----------------------------------------------------------------------------
@@ -51,29 +55,29 @@ const char* const rf24AmpPower[] = {"MIN", "LOW", "HIGH", "MAX"};
 //-----------------------------------------------------------------------------
 // HM Radio class
 //-----------------------------------------------------------------------------
-template <uint8_t CE_PIN, uint8_t CS_PIN, uint8_t IRQ_PIN, class BUFFER, uint64_t DTU_ID=DTU_RADIO_ID>
+template <uint8_t CE_PIN, uint8_t CS_PIN, class BUFFER, uint64_t DTU_ID=DTU_RADIO_ID>
 class HmRadio {
     public:
         HmRadio() : mNrf24(CE_PIN, CS_PIN, SPI_SPEED) {
-            DPRINTLN(DBG_VERBOSE, F("hmRadio.h : HmRadio():mNrf24(CE_PIN: ") + String(CE_PIN) + F(", CS_PIN: ") + String(CS_PIN) + F(", SPI_SPEED: ") + String(SPI_SPEED) + ")");
-            mTxChLst[0] = 40;
-            //mTxChIdx = 1;
+            DPRINT(DBG_VERBOSE, F("hmRadio.h : HmRadio():mNrf24(CE_PIN: "));
+            DPRINT(DBG_VERBOSE, String(CE_PIN));
+            DPRINT(DBG_VERBOSE, F(", CS_PIN: "));
+            DPRINT(DBG_VERBOSE, String(CS_PIN));
+            DPRINT(DBG_VERBOSE, F(", SPI_SPEED: "));
+            DPRINTLN(DBG_VERBOSE, String(SPI_SPEED) + ")");
 
             // Depending on the program, the module can work on 2403, 2423, 2440, 2461 or 2475MHz.
             // Channel List      2403, 2423, 2440, 2461, 2475MHz
-            mRxChLst[0] = 03;
-            mRxChLst[1] = 23;
-            mRxChLst[2] = 40;
-            mRxChLst[3] = 61;
-            mRxChLst[4] = 75;
-            mRxChIdx    = 0;
-            mRxLoopCnt  = RX_LOOP_CNT;
+            mRfChLst[0] = 03;
+            mRfChLst[1] = 23;
+            mRfChLst[2] = 40;
+            mRfChLst[3] = 61;
+            mRfChLst[4] = 75;
 
-            pinCs  = CS_PIN;
-            pinCe  = CE_PIN;
-            pinIrq = IRQ_PIN;
+            mTxChIdx    = 2; // Start TX with 40
+            mRxChIdx    = 0; // Start RX with 03
+            mRxLoopCnt  = RF_LOOP_CNT;
 
-            AmplifierPower = 1;
             mSendCnt       = 0;
 
             mSerialDebug = false;
@@ -81,13 +85,13 @@ class HmRadio {
         }
         ~HmRadio() {}
 
-        void setup(BUFFER *ctrl) {
+        void setup(config_t *config, BUFFER *ctrl) {
             DPRINTLN(DBG_VERBOSE, F("hmRadio.h:setup"));
-            pinMode(pinIrq, INPUT_PULLUP);
+            pinMode(config->pinIrq, INPUT_PULLUP);
 
             mBufCtrl = ctrl;
 
-            mNrf24.begin(pinCe, pinCs);
+            mNrf24.begin(config->pinCe, config->pinCs);
             mNrf24.setRetries(0, 0);
 
             mNrf24.setChannel(DEFAULT_RECV_CHANNEL);
@@ -102,14 +106,15 @@ class HmRadio {
             // enable only receiving interrupts
             mNrf24.maskIRQ(true, true, false);
 
-            DPRINTLN(DBG_INFO, F("RF24 Amp Pwr: RF24_PA_") + String(rf24AmpPower[AmplifierPower]));
-            mNrf24.setPALevel(AmplifierPower & 0x03);
+            DPRINT(DBG_INFO, F("RF24 Amp Pwr: RF24_PA_"));
+            DPRINTLN(DBG_INFO, String(rf24AmpPowerNames[config->amplifierPower]));
+            mNrf24.setPALevel(config->amplifierPower & 0x03);
             mNrf24.startListening();
 
             DPRINTLN(DBG_INFO, F("Radio Config:"));
             mNrf24.printPrettyDetails();
 
-            mTxCh = getDefaultChannel();
+            mTxCh = setDefaultChannels();
 
             if(!mNrf24.isChipConnected()) {
                 DPRINTLN(DBG_WARN, F("WARNING! your NRF24 module can't be reached, check the wiring"));
@@ -128,20 +133,19 @@ class HmRadio {
                 while(mNrf24.available(&pipe)) {
                     if(!mBufCtrl->full()) {
                         p = mBufCtrl->getFront();
-                        p->rxCh = mRxChLst[mRxChIdx];
+                        p->rxCh = mRfChLst[mRxChIdx];
                         len = mNrf24.getPayloadSize();
                         if(len > MAX_RF_PAYLOAD_SIZE)
                             len = MAX_RF_PAYLOAD_SIZE;
 
                         mNrf24.read(p->packet, len);
                         mBufCtrl->pushFront(p);
+                        yield();
                     }
-                    else {
-                        mNrf24.flush_rx(); // drop the packet
+                    else
                         break;
-                    }
-                    yield();
                 }
+                mNrf24.flush_rx(); // drop the packet
             }
             else
                 RESTORE_IRQ;
@@ -152,32 +156,54 @@ class HmRadio {
             mIrqRcvd = true;
         }
 
-        uint8_t getDefaultChannel(void) {
-            //DPRINTLN(DBG_VERBOSE, F("hmRadio.h:getDefaultChannel"));
-            return mTxChLst[0];
-        }
-        /*uint8_t getLastChannel(void) {
-            return mTxChLst[mTxChIdx];
+        uint8_t setDefaultChannels(void) {
+            //DPRINTLN(DBG_VERBOSE, F("hmRadio.h:setDefaultChannels"));
+            mTxChIdx    = 2; // Start TX with 40
+            mRxChIdx    = 0; // Start RX with 03            
+            return mRfChLst[mTxChIdx];
         }
 
-        uint8_t getNxtChannel(void) {
-            if(++mTxChIdx >= 4)
-                mTxChIdx = 0;
-            return mTxChLst[mTxChIdx];
-        }*/
+        void sendControlPacket(uint64_t invId, uint8_t cmd, uint16_t *data) {
+            DPRINTLN(DBG_VERBOSE, F("hmRadio.h:sendControlPacket"));
+            sendCmdPacket(invId, TX_REQ_DEVCONTROL, ALL_FRAMES, false); // 0x80 implementation as original DTU code
+            int cnt = 0;
+            mTxBuf[10] = cmd; // cmd --> 0x0b => Type_ActivePowerContr, 0 on, 1 off, 2 restart, 12 reactive power, 13 power factor
+            mTxBuf[10 + (++cnt)] = 0x00;
+            if (cmd >= ActivePowerContr && cmd <= PFSet){
+                mTxBuf[10 + (++cnt)] = ((data[0] * 10) >> 8) & 0xff; // power limit
+                mTxBuf[10 + (++cnt)] = ((data[0] * 10)     ) & 0xff; // power limit
+                mTxBuf[10 + (++cnt)] = ((data[1]     ) >> 8) & 0xff; // setting for persistens handlings
+                mTxBuf[10 + (++cnt)] = ((data[1]     )     ) & 0xff; // setting for persistens handling
+            }
+            // crc control data
+            uint16_t crc = Hoymiles::crc16(&mTxBuf[10], cnt+1);
+            mTxBuf[10 + (++cnt)] = (crc >> 8) & 0xff;
+            mTxBuf[10 + (++cnt)] = (crc     ) & 0xff;
+            // crc over all
+            cnt +=1;
+            mTxBuf[10 + cnt] = Hoymiles::crc8(mTxBuf, 10 + cnt);
 
-        void sendTimePacket(uint64_t invId, uint32_t ts) {
+            sendPacket(invId, mTxBuf, 10 + (++cnt), true);
+        }
+
+        void sendTimePacket(uint64_t invId, uint8_t cmd, uint32_t ts, uint16_t alarmMesId) {
             //DPRINTLN(DBG_VERBOSE, F("hmRadio.h:sendTimePacket"));
-            sendCmdPacket(invId, 0x15, 0x80, false);
-            mTxBuf[10] = 0x0b; // cid
+            sendCmdPacket(invId, TX_REQ_INFO, ALL_FRAMES, false);
+            mTxBuf[10] = cmd; // cid
             mTxBuf[11] = 0x00;
             CP_U32_LittleEndian(&mTxBuf[12], ts);
-            mTxBuf[19] = 0x05;
-
-            uint16_t crc = crc16(&mTxBuf[10], 14);
+            if (cmd == RealTimeRunData_Debug || cmd == AlarmData || cmd == AlarmUpdate ){
+                mTxBuf[18] = (alarmMesId >> 8) & 0xff;
+                mTxBuf[19] = (alarmMesId     ) & 0xff;
+                //mTxBuf[19] = 0x05; // ToDo: Shall be the last received Alarm Index Number
+            } else {
+                mTxBuf[18] = 0x00;
+                mTxBuf[19] = 0x00;
+            }
+            uint16_t crc = Hoymiles::crc16(&mTxBuf[10], 14);
             mTxBuf[24] = (crc >> 8) & 0xff;
             mTxBuf[25] = (crc     ) & 0xff;
-            mTxBuf[26] = crc8(mTxBuf, 26);
+            mTxBuf[26] = Hoymiles::crc8(mTxBuf, 26);
 
             sendPacket(invId, mTxBuf, 27, true);
         }
@@ -190,7 +216,7 @@ class HmRadio {
             CP_U32_BigEndian(&mTxBuf[5], (DTU_ID >> 8));
             mTxBuf[9]  = pid;
             if(calcCrc) {
-                mTxBuf[10] = crc8(mTxBuf, 10);
+                mTxBuf[10] = Hoymiles::crc8(mTxBuf, 10);
                 sendPacket(invId, mTxBuf, 11, false);
             }
         }
@@ -204,7 +230,7 @@ class HmRadio {
                 buf[i-1] = (buf[i] << 1) | (buf[i+1] >> 7);
             }
 
-            uint8_t crc = crc8(buf, *len-1);
+            uint8_t crc = Hoymiles::crc8(buf, *len-1);
             bool valid  = (crc == buf[*len-1]);
 
             return valid;
@@ -242,11 +268,8 @@ class HmRadio {
             return mNrf24.isChipConnected();
         }
 
-        uint8_t pinCs;
-        uint8_t pinCe;
-        uint8_t pinIrq;
 
-        uint8_t AmplifierPower;
+
         uint32_t mSendCnt;
 
         bool mSerialDebug;
@@ -257,7 +280,7 @@ class HmRadio {
             //DPRINTLN(DBG_VERBOSE, "sent packet: #" + String(mSendCnt));
             //dumpBuf("SEN ", buf, len);
             if(mSerialDebug) {
-                DPRINT(DBG_INFO, "Transmit " + String(len) + " | ");
+                DPRINT(DBG_INFO, "TX " + String(len) + "B Ch" + String(mRfChLst[mTxChIdx]) + " | ");
                 dumpBuf(NULL, buf, len);
             }
 
@@ -265,10 +288,10 @@ class HmRadio {
             mNrf24.stopListening();
 
             if(clear)
-                mRxLoopCnt = RX_LOOP_CNT;
+                mRxLoopCnt = RF_LOOP_CNT;
 
-            mTxCh = getDefaultChannel();
-            mNrf24.setChannel(mTxCh);
+            mNrf24.setChannel(mRfChLst[mTxChIdx]);
+            mTxCh = getTxNxtChannel(); // switch channel for next packet
             mNrf24.openWritingPipe(invId); // TODO: deprecated
             mNrf24.setCRCLength(RF24_CRC_16);
             mNrf24.enableDynamicPayloads();
@@ -279,7 +302,7 @@ class HmRadio {
             // Try to avoid zero payload acks (has no effect)
             mNrf24.openWritingPipe(DUMMY_RADIO_ID); // TODO: why dummy radio id?, deprecated
             mRxChIdx = 0;
-            mNrf24.setChannel(mRxChLst[mRxChIdx]);
+            mNrf24.setChannel(mRfChLst[mRxChIdx]);
             mNrf24.setAutoAck(false);
             mNrf24.setRetries(0, 0);
             mNrf24.disableDynamicPayloads();
@@ -290,25 +313,33 @@ class HmRadio {
             mSendCnt++;
         }
 
+        uint8_t getTxNxtChannel(void) {
+
+            if(++mTxChIdx >= RF_CHANNELS)
+                mTxChIdx = 0;
+            return mRfChLst[mTxChIdx];
+        }
+
         uint8_t getRxNxtChannel(void) {
 
-            if(++mRxChIdx >= RX_CHANNELS)
+            if(++mRxChIdx >= RF_CHANNELS)
                 mRxChIdx = 0;
-            return mRxChLst[mRxChIdx];
+            return mRfChLst[mRxChIdx];
         }
 
         uint8_t mTxCh;
-        uint8_t mTxChLst[1];
-        //uint8_t mTxChIdx;
+        uint8_t mTxChIdx;
 
-        uint8_t mRxChLst[RX_CHANNELS];
-
+        uint8_t mRfChLst[RF_CHANNELS];
+        
         uint8_t mRxChIdx;
         uint16_t mRxLoopCnt;
 
         RF24 mNrf24;
         BUFFER *mBufCtrl;
         uint8_t mTxBuf[MAX_RF_PAYLOAD_SIZE];
+
+        DevControlCmdType DevControlCmd;
 
         volatile bool mIrqRcvd;
 };
