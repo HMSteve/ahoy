@@ -7,8 +7,8 @@
 #define __CONFIG_H__
 
 // fallback WiFi info
-#define FB_WIFI_SSID    "YOUR_WIFI_SSID"
-#define FB_WIFI_PWD     "YOUR_WIFI_PWD"
+#define FB_WIFI_SSID    "YOUR-SSID"
+#define FB_WIFI_PWD     "YOUR-PWD"
 
 
 // access point info
@@ -26,7 +26,7 @@
 
 // time during the ESP will act as access point on connection failure (to
 // station) in seconds
-#define WIFI_AP_ACTIVE_TIME     60
+#define WIFI_AP_ACTIVE_TIME     180
 
 // default device name
 #define DEF_DEVICE_NAME         "AHOY-DTU"
@@ -35,7 +35,7 @@
 #define PACKET_BUFFER_SIZE      30
 
 // number of configurable inverters
-#define MAX_NUM_INVERTERS       3
+#define MAX_NUM_INVERTERS       1
 
 // default serial interval
 #define SERIAL_INTERVAL     5
