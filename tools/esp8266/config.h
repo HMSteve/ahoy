@@ -26,15 +26,15 @@
 
 // time during the ESP will act as access point on connection failure (to
 // station) in seconds
-#define WIFI_AP_ACTIVE_TIME     60
+#define WIFI_AP_ACTIVE_TIME     180
 
 // default device name
-#define DEF_DEVICE_NAME         "AHOY-DTU"
+#define DEF_DEVICE_NAME         "AHOY"
 
 // default pinout
 #define DEF_RF24_CS_PIN         15
 #define DEF_RF24_CE_PIN         2
-#define DEF_RF24_IRQ_PIN        0
+#define DEF_RF24_IRQ_PIN        4
 
 // default NRF24 power, possible values (0 - 3)
 #define DEF_AMPLIFIERPOWER      2
@@ -43,7 +43,7 @@
 #define PACKET_BUFFER_SIZE      30
 
 // number of configurable inverters
-#define MAX_NUM_INVERTERS       3
+#define MAX_NUM_INVERTERS       1
 
 // default serial interval
 #define SERIAL_INTERVAL         5
